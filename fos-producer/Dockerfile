@@ -1,0 +1,15 @@
+FROM maven:3.8.3-openjdk-17 AS build
+
+WORKDIR /home/fos-producer
+
+COPY pom.xml .
+RUN mvn verify -DskipTests --fail-never
+
+COPY src ./src
+RUN mvn verify
+
+FROM azul/zulu-openjdk-alpine:17-jre-latest
+ENTRYPOINT ["java", "-jar", "/app/fos-producer.jar"]
+
+WORKDIR /app
+COPY --from=build /home/fos-producer/target .

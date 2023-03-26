@@ -1,0 +1,139 @@
+version: "3"
+
+networks:
+  fosnetwork:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/24
+          gateway: 172.20.0.1
+
+services:
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.2
+
+  kafka:
+    image: wurstmeister/kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_ADVERTISED_HOST_NAME: 172.20.0.3
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_CREATE_TOPICS: "producedEvents:1:1,availableDBEntries:1:1"
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.3
+    depends_on:
+      - zookeeper
+
+  spark:
+    image: docker.io/bitnami/spark:3.3.1
+    container_name: spark
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - '8080:8080'
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.10
+    volumes:
+      - ./jars_dir:/opt/bitnami/spark/ivy:z
+
+  spark-worker-1:
+    image: docker.io/bitnami/spark:3.3.1
+    container_name: spark-worker-1
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark:7077
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+    ports:
+      - '8081:8081'
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.11
+    depends_on:
+      - spark
+
+  postgres:
+    image: postgres:15.1
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - '5432:5432'
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.6
+    tmpfs:
+      - /var/lib/postgresql/data
+    volumes:
+      - ./sql/create_tables.sql:/docker-entrypoint-initdb.d/create_tables.sql
+
+  jupyter-spark:
+    container_name: jupyter-spark
+    image: jupyter/pyspark-notebook:spark-3.3.1
+    env_file: .env
+    ports:
+      - '8888:8888'
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.13
+    volumes:
+      - ./spark:/home/jovyan
+    #comment entrypoint for developing with notebook
+    entrypoint: [ "bash", "-c", "spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.1,org.postgresql:postgresql:42.5.1 stream.py"]
+    depends_on:
+      - spark-worker-1
+      - postgres
+
+  fos-report:
+    build: fos-report
+    image: fos/fos-report:latest
+    container_name: fos-report
+    env_file: .env
+    ports:
+      - "8083:8083"
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.4
+    depends_on:
+      - kafka
+      - jupyter-spark
+
+  fos-producer:
+    build: fos-producer
+    image: fos/fos-producer:latest
+    container_name: fos-producer
+    env_file: .env
+    ports:
+      - "8082:8082"
+    networks:
+      fosnetwork:
+        ipv4_address: 172.20.0.5
+    volumes:
+      - ./data:/data
+    depends_on:
+      - kafka
+      - jupyter-spark
+
+
+
+
